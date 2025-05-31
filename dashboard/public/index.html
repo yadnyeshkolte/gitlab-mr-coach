@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitLab MR Coach Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .stat-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            color: white;
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #666;
+        }
+
+        .error {
+            color: #e74c3c;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .recent-feedback {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .feedback-item {
+            border-bottom: 1px solid #eee;
+            padding: 15px 0;
+        }
+
+        .feedback-item:last-child {
+            border-bottom: none;
+        }
+
+        .feedback-type {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .type-security { background: #e74c3c; color: white; }
+        .type-performance { background: #f39c12; color: white; }
+        .type-style { background: #3498db; color: white; }
+        .type-bug { background: #e67e22; color: white; }
+
+        .feedback-message {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .feedback-meta {
+            font-size: 0.9rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🤖 GitLab MR Coach</h1>
+        <p>AI-Powered Code Review Analytics Dashboard</p>
+        <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh Data</button>
+    </div>
+
+    <div class="stat-cards" id="statCards">
+        <div class="loading">Loading statistics...</div>
+    </div>
+
+    <div class="dashboard-grid">
+        <div class="card">
+            <h3>📊 Suggestions by Type</h3>
+            <div class="chart-container">
+                <canvas id="typeChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>📈 Activity Over Time</h3>
+            <div class="chart-container">
+                <canvas id="activityChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>🕐 Recent Feedback</h3>
+        <div class="recent-feedback" id="recentFeedback">
+            <div class="loading">Loading recent feedback...</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let typeChart, activityChart;
+
+    async function loadDashboard() {
+        try {
+            await Promise.all([
+                loadStats(),
+                loadRecentFeedback()
+            ]);
+        } catch (error) {
+            console.error('Error loading dashboard:', error);
+        }
+    }
+
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/stats');
+            const data = await response.json();
+
+            renderStatCards(data);
+            renderTypeChart(data.suggestionsByType);
+            renderActivityChart(data.dailyActivity);
+        } catch (error) {
+            document.getElementById('statCards').innerHTML =
+                '<div class="error">❌ Failed to load statistics</div>';
+        }
+    }
+
+    function renderStatCards(data) {
+        const statCards = document.getElementById('statCards');
+        statCards.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${data.totalSuggestions}</div>
+                    <div class="stat-label">Total Suggestions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${data.totalMRs}</div>
+                    <div class="stat-label">Merge Requests</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${data.totalProjects}</div>
+                    <div class="stat-label">Projects</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${Math.round(data.totalSuggestions / (data.totalMRs || 1) * 10) / 10}</div>
+                    <div class="stat-label">Avg per MR</div>
+                </div>
+            `;
+    }
+
+    function renderTypeChart(suggestionsByType) {
+        const ctx = document.getElementById('typeChart').getContext('2d');
+
+        if (typeChart) {
+            typeChart.destroy();
+        }
+
+        const colors = {
+            security: '#e74c3c',
+            performance: '#f39c12',
+            style: '#3498db',
+            bug: '#e67e22'
+        };
+
+        typeChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: suggestionsByType.map(item => item.type.toUpperCase()),
+                datasets: [{
+                    data: suggestionsByType.map(item => item.count),
+                    backgroundColor: suggestionsByType.map(item => colors[item.type] || '#95a5a6'),
+                    borderWidth: 2,
+                    borderColor: '#fff'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    }
+
+    function renderActivityChart(dailyActivity) {
+        const ctx = document.getElementById('activityChart').getContext('2d');
+
+        if (activityChart) {
+            activityChart.destroy();
+        }
+
+        activityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dailyActivity.map(item => item.date),
+                datasets: [{
+                    label: 'Suggestions',
+                    data: dailyActivity.map(item => item.suggestions),
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    }
+
+    async function loadRecentFeedback() {
+        try {
+            const response = await fetch('/api/recent?limit=10');
+            const feedback = await response.json();
+
+            const container = document.getElementById('recentFeedback');
+
+            if (feedback.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No feedback yet! Create some merge requests to see data.</div>';
+                return;
+            }
+
+            container.innerHTML = feedback.map(item => `
+                    <div class="feedback-item">
+                        <div class="feedback-type type-${item.type}">${item.type}</div>
+                        <div class="feedback-message">${item.message}</div>
+                        <div class="feedback-meta">
+                            📁 ${item.filePath} •
+                            📋 MR #${item.mrIid} •
+                            📅 ${new Date(item.timestamp).toLocaleString()}
+                        </div>
+                    </div>
+                `).join('');
+        } catch (error) {
+            document.getElementById('recentFeedback').innerHTML =
+                '<div class="error">❌ Failed to load recent feedback</div>';
+        }
+    }
+
+    // Load dashboard on page load
+    loadDashboard();
+
+    // Auto-refresh every 5 minutes
+    setInterval(loadDashboard, 5 * 60 * 1000);
+</script>
+</body>
+</html>
